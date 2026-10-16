@@ -15,6 +15,16 @@ test('a panorama caps the text height instead of the width', () => {
   assert.ok(box.width < 3200);
 });
 
+test('the path never carries NaN, whatever the photo size', () => {
+  assert.ok(!layoutCaption({ width: 960, height: 1280 }).path.includes('NaN'), 'the photo that lost its "t"');
+  for (let width = 200; width <= 2600; width += 37) {
+    for (const height of [width * 0.5, width * 0.75, width, width * 1.34, width * 2]) {
+      const { path } = layoutCaption({ width, height: Math.round(height) });
+      assert.ok(!path.includes('NaN'), `${width}x${Math.round(height)}`);
+    }
+  }
+});
+
 test('clampBox keeps the box inside the image', () => {
   assert.deepEqual(clampBox({ left: -5, top: 90, width: 50, height: 20 }, { width: 40, height: 100 }), {
     left: 0,

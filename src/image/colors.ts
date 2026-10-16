@@ -1,13 +1,25 @@
 import sharp from 'sharp';
-import type { Box, TextColors } from './image.types.ts';
+import type { CaptionLayout, TextColors } from './image.types.ts';
+import { maskSvg } from './svg.ts';
 
-const BLACK_TEXT_FROM_LUMA = 165;
+const BRIGHT_LUMA = 170;
+const BLACK_TEXT_FROM_BRIGHT_SHARE = 0.5;
 
-export async function meanLuma(image: Buffer, box: Box): Promise<number> {
-  const stats = await sharp(image).extract(box).greyscale().stats();
-  return stats.channels[0].mean;
+export async function brightShare(image: Buffer, layout: CaptionLayout): Promise<number> {
+  const background = await sharp(image).extract(layout.box).removeAlpha().greyscale().raw().toBuffer();
+  const mask = await sharp(Buffer.from(maskSvg(layout))).ensureAlpha().extractChannel(3).raw().toBuffer();
+
+  let covered = 0;
+  let bright = 0;
+  for (let i = 0; i < mask.length; i++) {
+    covered += mask[i];
+    if (background[i] > BRIGHT_LUMA) bright += mask[i];
+  }
+  return covered ? bright / covered : 0;
 }
 
-export function pickColors(luma: number): TextColors {
-  return luma > BLACK_TEXT_FROM_LUMA ? { fill: 'black', shadow: 'white' } : { fill: 'white', shadow: 'black' };
+export function pickColors(brightShare: number): TextColors {
+  return brightShare > BLACK_TEXT_FROM_BRIGHT_SHARE
+    ? { fill: 'black', shadow: 'white' }
+    : { fill: 'white', shadow: 'black' };
 }

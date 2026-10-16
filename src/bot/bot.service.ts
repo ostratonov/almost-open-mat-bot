@@ -45,8 +45,11 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private async onPicture(ctx: Context) {
+    const started = performance.now();
+    void ctx.replyWithChatAction('upload_photo');
     const file = await ctx.getFile();
     const original = await downloadFile(config.botToken, file.file_path!);
+    const downloaded = performance.now();
 
     const image = await addCaption(original).catch((err) => {
       this.logger.warn(`caption failed: ${err}`);
@@ -55,8 +58,15 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
     
     if (!image) return ctx.reply(TEXTS.cannotOpen);
 
+    const captioned = performance.now();
+
     const sent = await ctx.replyWithPhoto(new InputFile(image));
     this.lastPicture.set(ctx.chat!.id, largestPhoto(sent.photo).file_id);
+
+    const ms = (from: number, to: number) => Math.round(to - from);
+    this.logger.log(
+      `picture ${original.length >> 10}KB: download ${ms(started, downloaded)}ms, caption ${ms(downloaded, captioned)}ms, send ${ms(captioned, performance.now())}ms`,
+    );
   }
 
   private async onSuggest(ctx: Context) {

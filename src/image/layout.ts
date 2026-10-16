@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import opentype from 'opentype.js';
+import opentype, { type PathCommand } from 'opentype.js';
 import type { Box, CaptionLayout, Size } from './image.types.ts';
 
 export const CAPTION = 'almost open mat';
@@ -29,9 +29,29 @@ export function layoutCaption({ width, height }: Size): CaptionLayout {
 
   return {
     size,
-    path: font.getPath(CAPTION, x, baseline, size).toPathData(2),
+    path: toPathData(font.getPath(CAPTION, x, baseline, size).commands),
     box: clampBox(box, { width, height }),
   };
+}
+
+// opentype's own toPathData writes NaN for coordinates a hair off an integer (it rounds via "1e-7" + "e+2").
+export function toPathData(commands: PathCommand[]): string {
+  const n = (v: number) => v.toFixed(2);
+  return commands
+    .map((c) => {
+      switch (c.type) {
+        case 'M':
+        case 'L':
+          return `${c.type}${n(c.x)} ${n(c.y)}`;
+        case 'Q':
+          return `Q${n(c.x1)} ${n(c.y1)} ${n(c.x)} ${n(c.y)}`;
+        case 'C':
+          return `C${n(c.x1)} ${n(c.y1)} ${n(c.x2)} ${n(c.y2)} ${n(c.x)} ${n(c.y)}`;
+        case 'Z':
+          return 'Z';
+      }
+    })
+    .join('');
 }
 
 export function clampBox(box: Box, bounds: Size): Box {
