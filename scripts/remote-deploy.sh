@@ -17,9 +17,13 @@ main() {
   docker image prune -f >/dev/null
 
   sleep 5
-  local state
-  state="$(docker compose ps bot --format '{{.State}}')"
-  [ "$state" = running ] || { docker compose logs --tail 30 bot; echo "deploy: bot is $state" >&2; exit 1; }
+  local states
+  states="$(docker compose ps --all --format '{{.State}}')"
+  if [ -z "$states" ] || grep -qvx running <<<"$states"; then
+    docker compose logs --tail 30
+    echo "deploy: bot is ${states:-gone}" >&2
+    exit 1
+  fi
   echo "==> bot is running"
 }
 

@@ -1,15 +1,17 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
+import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner';
 import { Bot, Context, InputFile, InputMediaBuilder } from 'grammy';
 import type { User } from 'grammy/types';
 import { config } from '../config.ts';
 import { addCaption } from '../image/caption.ts';
 import { Command, MENU, TEXTS } from '../texts.ts';
-import type { PendingPicture, RenderedPicture } from './bot.types.ts';
+import { BotEvent, Limit, type PendingPicture, type RenderedPicture } from './bot.types.ts';
 import { MediaGroupCollector } from './media-group.ts';
 import { RateLimiter } from './rate-limiter.ts';
 import { album, botPhotoId, downloadFile, isImage, largestPhoto, mentionCaption } from './telegram.utils.ts';
 
 const SUGGESTIONS_PER_MINUTE = 3;
+const PICTURES_PER_MINUTE = 20;
 const ALBUM_QUIET_MS = 1000;
 
 const elapsed = (from: number) => Math.round(performance.now() - from);
@@ -20,17 +22,22 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   private readonly bot = new Bot(config.botToken);
   private readonly lastPictures = new Map<number, string[]>();
   private readonly suggestions = new RateLimiter(SUGGESTIONS_PER_MINUTE, 60_000);
+  private readonly pictures = new RateLimiter(PICTURES_PER_MINUTE, 60_000);
   private readonly albums = new MediaGroupCollector<PendingPicture>(ALBUM_QUIET_MS, (items) => this.onAlbum(items));
+  private runner?: RunnerHandle;
 
-  onApplicationBootstrap() {
+  async onApplicationBootstrap() {
     this.setUpProfile();
     this.registerHandlers();
-    this.bot.catch((err) => this.logger.error(err.error));
-    void this.bot.start({ onStart: (me) => this.logger.log(`@${me.username} is polling`) });
+    this.bot.catch((err) => this.logger.error({ event: BotEvent.Error, error: String(err.error) }, (err.error as Error)?.stack));
+
+    await this.bot.init();
+    this.runner = run(this.bot);
+    this.logger.log({ event: BotEvent.Started, username: this.bot.botInfo.username });
   }
 
-  onApplicationShutdown() {
-    return this.bot.stop();
+  async onApplicationShutdown() {
+    if (this.runner?.isRunning()) await this.runner.stop();
   }
 
   private setUpProfile() {
@@ -39,6 +46,9 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private registerHandlers() {
+    // Chats run in parallel, but one chat's updates stay in order: an album's first photo sends the placeholder the rest rely on.
+    this.bot.use(sequentialize((ctx) => ctx.chat?.id.toString()));
+
     this.bot.command(Command.Start, (ctx) => ctx.reply(TEXTS.about));
     this.bot.command(Command.Support, (ctx) => ctx.reply(TEXTS.support));
     this.bot.command(Command.ChatId, (ctx) => ctx.reply(String(ctx.chat.id)));
@@ -66,20 +76,29 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   private onAlbum(items: PendingPicture[]) {
     const placeholderId = items.find((item) => item.placeholderId)!.placeholderId!;
     const pictures = items.map((item) => item.ctx).sort((a, b) => a.message!.message_id - b.message!.message_id);
-    this.answer(pictures, placeholderId).catch((err) => this.logger.error(err));
+    this.answer(pictures, placeholderId).catch((err) =>
+      this.logger.error({ event: BotEvent.Error, error: String(err) }, err?.stack),
+    );
   }
 
   private async answer(pictures: Context[], placeholderId: number) {
     const chatId = pictures[0].chat!.id;
+    const userId = pictures[0].from!.id;
+    if (!this.pictures.tryTake(userId, pictures.length)) {
+      this.logger.log({ event: BotEvent.RateLimited, limit: Limit.Pictures, userId, pictures: pictures.length });
+      return this.bot.api.editMessageText(chatId, placeholderId, TEXTS.tooManyPictures);
+    }
+
     const results = await Promise.all(
       pictures.map((ctx) =>
         this.render(ctx).catch((err) => {
-          this.logger.warn(`picture failed: ${err}`);
+          this.logger.warn({ event: BotEvent.PictureFailed, userId, error: String(err) });
           return null;
         }),
       ),
     );
     const rendered = results.filter((r) => r !== null);
+    for (const { timings } of rendered) this.logger.log({ event: BotEvent.Picture, userId, ...timings });
     if (!rendered.length) return this.bot.api.editMessageText(chatId, placeholderId, TEXTS.cannotOpen);
 
     const sending = performance.now();
@@ -89,7 +108,7 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
         : await this.sendAlbum(chatId, placeholderId, rendered.map((r) => r.image));
     this.lastPictures.set(chatId, fileIds);
 
-    this.logger.log(`${rendered.map((r) => r.timings).join('; ')}; send ${elapsed(sending)}ms`);
+    this.logger.log({ event: BotEvent.Answer, userId, pictures: rendered.length, sendMs: elapsed(sending) });
   }
 
   private async replacePlaceholder(chatId: number, placeholderId: number, image: Buffer): Promise<string[]> {
@@ -112,20 +131,30 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
     const image = await addCaption(original);
     return {
       image,
-      timings: `${original.length >> 10}KB: getFile ${Math.round(located - started)}ms, download ${Math.round(downloaded - located)}ms, caption ${elapsed(downloaded)}ms`,
+      timings: {
+        kb: original.length >> 10,
+        getFileMs: Math.round(located - started),
+        downloadMs: Math.round(downloaded - located),
+        captionMs: elapsed(downloaded),
+      },
     };
   }
 
   private async onSuggest(ctx: Context) {
     const chatId = ctx.chat!.id;
+    const userId = ctx.from!.id;
     const replied = ctx.message?.reply_to_message;
     const repliedId = replied && botPhotoId(replied, ctx.me.id);
     const fileIds = replied ? (repliedId ? [repliedId] : []) : (this.lastPictures.get(chatId) ?? []);
     if (!fileIds.length) return ctx.reply(replied ? TEXTS.replyToCaptioned : TEXTS.sendPictureFirst);
-    if (!this.suggestions.tryTake(ctx.from!.id)) return ctx.reply(TEXTS.tooManySuggestions);
+    if (!this.suggestions.tryTake(userId)) {
+      this.logger.log({ event: BotEvent.RateLimited, limit: Limit.Suggestions, userId });
+      return ctx.reply(TEXTS.tooManySuggestions);
+    }
 
     await this.sendToTrainer(fileIds, ctx.from!);
     if (this.lastPictures.get(chatId) === fileIds) this.lastPictures.delete(chatId);
+    this.logger.log({ event: BotEvent.Suggestion, userId, pictures: fileIds.length });
     await ctx.reply(TEXTS.sentToTrainer);
   }
 

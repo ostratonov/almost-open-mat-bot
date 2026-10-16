@@ -14,10 +14,11 @@ export const TEXTS = {
   drawing: 'дєлаю свойо...',
   cannotOpen: 'Не зміг відкрити цю картинку',
   sendPictureFirst: 'спершу кинь картинку',
-  replyToCaptioned: 'реплайни /suggest на картинку з написом від мене.',
+  replyToCaptioned: 'реплайни /suggest на картинку з написом від мене',
+  tooManyPictures: 'забагато картинок за раз, видихни хвилинку і потім ще кинеш',
   tooManySuggestions:
     'ти almost перенасичив чат тренера своїми прекрасними світлинами. посиди трошки пару хв, потім ще кинеш. осс',
-  sentToTrainer: 'Відправлено тренеру ✅',
+  sentToTrainer: 'відправлено, шукай себе в прошмандовках культа',
   suggestedBy: 'від ',
 } as const;
 

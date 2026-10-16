@@ -8,10 +8,10 @@ export class RateLimiter {
     this.windowMs = windowMs;
   }
 
-  tryTake(key: number, now = Date.now()): boolean {
+  tryTake(key: number, count = 1, now = Date.now()): boolean {
     const recent = (this.hits.get(key) ?? []).filter((at) => now - at < this.windowMs);
-    const allowed = recent.length < this.limit;
-    if (allowed) recent.push(now);
+    const allowed = recent.length + count <= this.limit;
+    if (allowed) recent.push(...Array<number>(count).fill(now));
     this.hits.set(key, recent);
     return allowed;
   }

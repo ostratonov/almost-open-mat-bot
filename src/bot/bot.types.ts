@@ -6,12 +6,34 @@ export interface PhotoCaption {
   caption_entities: MessageEntity[];
 }
 
+export interface PictureTimings {
+  kb: number;
+  getFileMs: number;
+  downloadMs: number;
+  captionMs: number;
+}
+
 export interface RenderedPicture {
   image: Buffer;
-  timings: string;
+  timings: PictureTimings;
 }
 
 export interface PendingPicture {
   ctx: Context;
   placeholderId?: number;
+}
+
+export enum BotEvent {
+  Started = 'started',
+  Picture = 'picture',
+  PictureFailed = 'picture_failed',
+  Answer = 'answer',
+  Suggestion = 'suggestion',
+  RateLimited = 'rate_limited',
+  Error = 'error',
+}
+
+export enum Limit {
+  Pictures = 'pictures',
+  Suggestions = 'suggestions',
 }
