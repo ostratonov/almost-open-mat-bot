@@ -1,10 +1,7 @@
 import 'reflect-metadata';
-import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { BotService } from './bot.service.js';
-
-@Module({ providers: [BotService] })
-class AppModule {}
+import { AppModule } from './app.module.ts';
 
 const app = await NestFactory.createApplicationContext(AppModule);
+
 app.enableShutdownHooks();
