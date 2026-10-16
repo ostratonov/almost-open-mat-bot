@@ -106,12 +106,13 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   private async render(ctx: Context): Promise<RenderedPicture> {
     const started = performance.now();
     const file = await ctx.getFile();
+    const located = performance.now();
     const original = await downloadFile(config.botToken, file.file_path!);
     const downloaded = performance.now();
     const image = await addCaption(original);
     return {
       image,
-      timings: `${original.length >> 10}KB: download ${Math.round(downloaded - started)}ms, caption ${elapsed(downloaded)}ms`,
+      timings: `${original.length >> 10}KB: getFile ${Math.round(located - started)}ms, download ${Math.round(downloaded - located)}ms, caption ${elapsed(downloaded)}ms`,
     };
   }
 
