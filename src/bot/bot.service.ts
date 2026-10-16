@@ -4,11 +4,11 @@ import { Bot, Context, InlineKeyboard, InputFile, InputMediaBuilder } from 'gram
 import type { User } from 'grammy/types';
 import { config } from '../config.ts';
 import { addCaption } from '../image/caption.ts';
-import { CallbackData, Command, MENU, TEXTS } from '../texts.ts';
+import { CallbackData, Command, GROUP_MENU, MENU, TEXTS } from '../texts.ts';
 import { BotEvent, Limit, type PendingPicture, type RenderedPicture } from './bot.types.ts';
 import { MediaGroupCollector } from './media-group.ts';
 import { RateLimiter } from './rate-limiter.ts';
-import { album, botPhotoId, downloadFile, isImage, largestPhoto, mentionCaption } from './telegram.utils.ts';
+import { album, botPhotoId, downloadFile, isImage, largestPhoto, mentionCaption, pictureFileId } from './telegram.utils.ts';
 
 const SUGGESTIONS_PER_MINUTE = 3;
 const PICTURES_PER_MINUTE = 20;
@@ -49,6 +49,7 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   private setUpProfile() {
     void this.bot.api.setMyDescription(TEXTS.about);
     void this.bot.api.setMyCommands(MENU);
+    void this.bot.api.setMyCommands(GROUP_MENU, { scope: { type: 'all_group_chats' } });
   }
 
   private registerHandlers() {
@@ -57,6 +58,8 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
 
     this.bot.command(Command.Start, (ctx) => ctx.reply(TEXTS.about));
     this.bot.command(Command.Support, (ctx) => ctx.reply(TEXTS.support));
+
+    this.bot.chatType(['group', 'supergroup']).command(Command.AlmostOpenMat, (ctx) => this.onGroupCommand(ctx));
 
     const dm = this.bot.chatType('private');
     dm.command(Command.Suggest, (ctx) => this.onSuggest(ctx));
@@ -68,37 +71,48 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private async onPicture(ctx: Context) {
-    const groupId = ctx.message?.media_group_id;
+    const message = ctx.message!;
+    const fileId = pictureFileId(message)!;
+    const groupId = message.media_group_id;
     if (!groupId) {
       const placeholder = await ctx.reply(TEXTS.drawing);
-      return this.answer([ctx], placeholder.message_id);
+      return this.answer(message.chat.id, message.from!.id, [fileId], placeholder.message_id, true);
     }
 
     const placeholderId = this.albums.has(groupId) ? undefined : (await ctx.reply(TEXTS.drawing)).message_id;
-    this.albums.add(groupId, { ctx, placeholderId });
+    this.albums.add(groupId, { message, fileId, placeholderId });
+  }
+
+  private async onGroupCommand(ctx: Context) {
+    const command = ctx.message!;
+    const target = command.reply_to_message;
+    const fileId = target && pictureFileId(target);
+    if (!target || !fileId) return ctx.reply(TEXTS.replyToPicture, { reply_parameters: { message_id: command.message_id, allow_sending_without_reply: true } });
+
+    const placeholder = await ctx.reply(TEXTS.drawing, { reply_parameters: { message_id: target.message_id, allow_sending_without_reply: true } });
+    return this.answer(command.chat.id, command.from!.id, [fileId], placeholder.message_id, false);
   }
 
   // Runs from a timer, outside grammY's middleware, so bot.catch never sees its errors.
   private onAlbum(items: PendingPicture[]) {
     const placeholderId = items.find((item) => item.placeholderId)!.placeholderId!;
-    const pictures = items.map((item) => item.ctx).sort((a, b) => a.message!.message_id - b.message!.message_id);
-    const answering = this.answer(pictures, placeholderId)
+    const sorted = items.sort((a, b) => a.message.message_id - b.message.message_id);
+    const { chat, from } = sorted[0].message;
+    const answering = this.answer(chat.id, from!.id, sorted.map((item) => item.fileId), placeholderId, true)
       .catch((err) => this.logger.error({ event: BotEvent.Error, error: String(err) }, err?.stack))
       .finally(() => this.albumAnswers.delete(answering));
     this.albumAnswers.add(answering);
   }
 
-  private async answer(pictures: Context[], placeholderId: number) {
-    const chatId = pictures[0].chat!.id;
-    const userId = pictures[0].from!.id;
-    if (!this.pictures.tryTake(userId, pictures.length)) {
-      this.logger.log({ event: BotEvent.RateLimited, limit: Limit.Pictures, userId, pictures: pictures.length });
+  private async answer(chatId: number, userId: number, fileIds: string[], placeholderId: number, suggestable: boolean) {
+    if (!this.pictures.tryTake(userId, fileIds.length)) {
+      this.logger.log({ event: BotEvent.RateLimited, limit: Limit.Pictures, userId, pictures: fileIds.length });
       return this.bot.api.editMessageText(chatId, placeholderId, TEXTS.tooManyPictures);
     }
 
     const results = await Promise.all(
-      pictures.map((ctx) =>
-        this.render(ctx).catch((err) => {
+      fileIds.map((fileId) =>
+        this.render(fileId).catch((err) => {
           this.logger.warn({ event: BotEvent.PictureFailed, userId, error: String(err) });
           return null;
         }),
@@ -109,15 +123,15 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
     if (!rendered.length) return this.bot.api.editMessageText(chatId, placeholderId, TEXTS.cannotOpen);
 
     const sending = performance.now();
-    if (rendered.length === 1) await this.replacePlaceholder(chatId, placeholderId, rendered[0].image);
+    if (rendered.length === 1) await this.replacePlaceholder(chatId, placeholderId, rendered[0].image, suggestable);
     else await this.sendAlbum(chatId, placeholderId, rendered.map((r) => r.image));
 
     this.logger.log({ event: BotEvent.Answer, userId, pictures: rendered.length, sendMs: elapsed(sending) });
   }
 
-  private replacePlaceholder(chatId: number, placeholderId: number, image: Buffer) {
+  private replacePlaceholder(chatId: number, placeholderId: number, image: Buffer, suggestable: boolean) {
     return this.bot.api.editMessageMedia(chatId, placeholderId, InputMediaBuilder.photo(new InputFile(image)), {
-      reply_markup: new InlineKeyboard().text(TEXTS.suggestButton, CallbackData.Suggest),
+      reply_markup: suggestable ? new InlineKeyboard().text(TEXTS.suggestButton, CallbackData.Suggest) : undefined,
     });
   }
 
@@ -126,9 +140,9 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
     await this.bot.api.deleteMessage(chatId, placeholderId);
   }
 
-  private async render(ctx: Context): Promise<RenderedPicture> {
+  private async render(fileId: string): Promise<RenderedPicture> {
     const started = performance.now();
-    const file = await ctx.getFile();
+    const file = await this.bot.api.getFile(fileId);
     const located = performance.now();
     const original = await downloadFile(config.botToken, file.file_path!);
     const downloaded = performance.now();

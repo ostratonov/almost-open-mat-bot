@@ -22,6 +22,12 @@ export function largestPhoto(photos: PhotoSize[]): PhotoSize {
   return photos.at(-1)!;
 }
 
+export function pictureFileId(message: Pick<Message, 'photo' | 'document'>): string | undefined {
+  if (message.photo) return largestPhoto(message.photo).file_id;
+  if (message.document && isImage(message.document)) return message.document.file_id;
+  return undefined;
+}
+
 export function botPhotoId(message: Pick<Message, 'from' | 'photo'>, botId: number): string | undefined {
   return message.from?.id === botId && message.photo ? largestPhoto(message.photo).file_id : undefined;
 }

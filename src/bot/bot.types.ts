@@ -1,5 +1,4 @@
-import type { Context } from 'grammy';
-import type { MessageEntity } from 'grammy/types';
+import type { Message, MessageEntity } from 'grammy/types';
 
 export interface PhotoCaption {
   caption: string;
@@ -19,7 +18,8 @@ export interface RenderedPicture {
 }
 
 export interface PendingPicture {
-  ctx: Context;
+  message: Message;
+  fileId: string;
   placeholderId?: number;
 }
 
