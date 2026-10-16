@@ -22,6 +22,16 @@ export function largestPhoto(photos: PhotoSize[]): PhotoSize {
   return photos.at(-1)!;
 }
 
+const MESSAGE_KINDS = ['text', 'sticker', 'animation', 'video', 'video_note', 'voice', 'audio', 'document', 'photo', 'location', 'contact', 'poll'] as const;
+
+export function messageKind(message: Message): string {
+  return MESSAGE_KINDS.find((kind) => kind in message) ?? 'other';
+}
+
+export function commandName(text: string): string {
+  return text.slice(1).split(/[@\s]/)[0].toLowerCase();
+}
+
 export function pictureFileId(message: Pick<Message, 'photo' | 'document'>): string | undefined {
   if (message.photo) return largestPhoto(message.photo).file_id;
   if (message.document && isImage(message.document)) return message.document.file_id;

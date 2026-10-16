@@ -1,10 +1,12 @@
 import type { BotCommand } from 'grammy/types';
+import type { PeriodStats } from './stats/stats.types.ts';
 
 export enum Command {
   Start = 'start',
   Suggest = 'suggest',
   Support = 'support',
   AlmostOpenMat = 'almostopenmat',
+  Stats = 'stats',
 }
 
 export enum CallbackData {
@@ -36,3 +38,21 @@ export const MENU: BotCommand[] = [
 export const GROUP_MENU: BotCommand[] = [
   { command: Command.AlmostOpenMat, description: 'реплайни на картинку, і буде almost open mat' },
 ];
+
+export const OWNER_MENU: BotCommand[] = [...MENU, { command: Command.Stats, description: 'статистика за тиждень' }];
+
+export function formatStats(stats: PeriodStats): string {
+  const lines = [
+    'за тиждень:',
+    `картинок: ${stats.pictures} (у групах ${stats.groupPictures})`,
+    `пропозицій тренеру: ${stats.suggestions}`,
+    `людей: ${stats.people}`,
+  ];
+  if (stats.top.length) {
+    lines.push('', 'найактивніші:');
+    stats.top.forEach((user, i) =>
+      lines.push(`${i + 1}. ${user.name} — картинки: ${user.pictures}, пропозиції: ${user.suggestions}`),
+    );
+  }
+  return lines.join('\n');
+}

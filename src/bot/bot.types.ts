@@ -26,6 +26,11 @@ export interface PendingPicture {
 export enum BotEvent {
   Started = 'started',
   Alive = 'alive',
+  Stopping = 'stopping',
+  Command = 'command',
+  Refused = 'refused',
+  Ignored = 'ignored',
+  ChatMember = 'chat_member',
   Picture = 'picture',
   PictureFailed = 'picture_failed',
   Answer = 'answer',
@@ -37,4 +42,15 @@ export enum BotEvent {
 export enum Limit {
   Pictures = 'pictures',
   Suggestions = 'suggestions',
+}
+
+export enum RefusedReason {
+  NotAnImage = 'not_an_image',
+  NoPictureReply = 'no_picture_reply',
+  NoCaptionedReply = 'no_captioned_reply',
+}
+
+export enum SuggestVia {
+  Button = 'button',
+  Reply = 'reply',
 }
