@@ -1,12 +1,12 @@
-import sharp from 'sharp';
+import sharp, { type Sharp } from 'sharp';
 import type { CaptionLayout, TextColors } from './image.types.ts';
 import { maskSvg } from './svg.ts';
 
 const BRIGHT_LUMA = 170;
 const BLACK_TEXT_FROM_BRIGHT_SHARE = 0.5;
 
-export async function brightShare(image: Buffer, layout: CaptionLayout): Promise<number> {
-  const background = await sharp(image).extract(layout.box).removeAlpha().greyscale().raw().toBuffer();
+export async function brightShare(image: Sharp, layout: CaptionLayout): Promise<number> {
+  const background = await image.extract(layout.box).removeAlpha().greyscale().raw().toBuffer();
   const mask = await sharp(Buffer.from(maskSvg(layout))).ensureAlpha().extractChannel(3).raw().toBuffer();
 
   let covered = 0;
