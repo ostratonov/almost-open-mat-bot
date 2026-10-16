@@ -26,8 +26,8 @@ export function botPhotoId(message: Pick<Message, 'from' | 'photo'>, botId: numb
   return message.from?.id === botId && message.photo ? largestPhoto(message.photo).file_id : undefined;
 }
 
-export function album(photos: (string | InputFile)[], caption?: PhotoCaption): InputMediaPhoto[] {
-  return photos.map((photo, i) => InputMediaBuilder.photo(photo, i === 0 ? caption : undefined));
+export function album(photos: InputFile[]): InputMediaPhoto[] {
+  return photos.map((photo) => InputMediaBuilder.photo(photo));
 }
 
 export async function downloadFile(botToken: string, filePath: string): Promise<Buffer> {

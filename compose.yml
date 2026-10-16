@@ -3,6 +3,7 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
+    stop_grace_period: 60s
     logging:
       options:
         max-size: 10m

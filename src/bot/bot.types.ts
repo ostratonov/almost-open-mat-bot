@@ -25,6 +25,7 @@ export interface PendingPicture {
 
 export enum BotEvent {
   Started = 'started',
+  Alive = 'alive',
   Picture = 'picture',
   PictureFailed = 'picture_failed',
   Answer = 'answer',

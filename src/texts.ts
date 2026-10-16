@@ -4,7 +4,6 @@ export enum Command {
   Start = 'start',
   Suggest = 'suggest',
   Support = 'support',
-  ChatId = 'chatid',
 }
 
 export const TEXTS = {
@@ -13,7 +12,6 @@ export const TEXTS = {
   notAnImage: 'це не картинка, петушара',
   drawing: 'дєлаю свойо...',
   cannotOpen: 'Не зміг відкрити цю картинку',
-  sendPictureFirst: 'спершу кинь картинку',
   replyToCaptioned: 'реплайни /suggest на картинку з написом від мене',
   tooManyPictures: 'забагато картинок за раз, видихни хвилинку і потім ще кинеш',
   tooManySuggestions:
@@ -24,6 +22,6 @@ export const TEXTS = {
 
 export const MENU: BotCommand[] = [
   { command: Command.Start, description: 'що вміє бот' },
-  { command: Command.Suggest, description: 'відправити останню картинку тренеру' },
+  { command: Command.Suggest, description: 'реплайни на картинку з написом, і я відправлю її тренеру' },
   { command: Command.Support, description: 'підтримка' },
 ];

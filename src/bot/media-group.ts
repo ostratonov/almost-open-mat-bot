@@ -22,4 +22,12 @@ export class MediaGroupCollector<T> {
     }, this.waitMs);
     this.groups.set(groupId, group);
   }
+
+  flush(): void {
+    for (const [groupId, group] of this.groups) {
+      clearTimeout(group.timer);
+      this.groups.delete(groupId);
+      this.onReady(group.items);
+    }
+  }
 }
