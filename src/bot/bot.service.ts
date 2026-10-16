@@ -1,13 +1,14 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
 import { run, sequentialize, type RunnerHandle } from '@grammyjs/runner';
-import { Bot, Context, InputFile, InputMediaBuilder } from 'grammy';
+import { Bot, Context, InlineKeyboard, InputFile, InputMediaBuilder } from 'grammy';
+import type { User } from 'grammy/types';
 import { config } from '../config.ts';
 import { addCaption } from '../image/caption.ts';
-import { Command, MENU, TEXTS } from '../texts.ts';
+import { CallbackData, Command, MENU, TEXTS } from '../texts.ts';
 import { BotEvent, Limit, type PendingPicture, type RenderedPicture } from './bot.types.ts';
 import { MediaGroupCollector } from './media-group.ts';
 import { RateLimiter } from './rate-limiter.ts';
-import { album, botPhotoId, downloadFile, isImage, mentionCaption } from './telegram.utils.ts';
+import { album, botPhotoId, downloadFile, isImage, largestPhoto, mentionCaption } from './telegram.utils.ts';
 
 const SUGGESTIONS_PER_MINUTE = 3;
 const PICTURES_PER_MINUTE = 20;
@@ -59,6 +60,7 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
 
     const dm = this.bot.chatType('private');
     dm.command(Command.Suggest, (ctx) => this.onSuggest(ctx));
+    dm.callbackQuery(CallbackData.Suggest, (ctx) => this.onSuggestButton(ctx));
     dm.on('message:photo', (ctx) => this.onPicture(ctx));
     dm.on('message:document', (ctx) =>
       isImage(ctx.message.document) ? this.onPicture(ctx) : ctx.reply(TEXTS.notAnImage),
@@ -114,7 +116,9 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private replacePlaceholder(chatId: number, placeholderId: number, image: Buffer) {
-    return this.bot.api.editMessageMedia(chatId, placeholderId, InputMediaBuilder.photo(new InputFile(image)));
+    return this.bot.api.editMessageMedia(chatId, placeholderId, InputMediaBuilder.photo(new InputFile(image)), {
+      reply_markup: new InlineKeyboard().text(TEXTS.suggestButton, CallbackData.Suggest),
+    });
   }
 
   private async sendAlbum(chatId: number, placeholderId: number, images: Buffer[]) {
@@ -141,17 +145,31 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private async onSuggest(ctx: Context) {
-    const userId = ctx.from!.id;
     const replied = ctx.message?.reply_to_message;
     const fileId = replied && botPhotoId(replied, ctx.me.id);
     if (!fileId) return ctx.reply(TEXTS.replyToCaptioned);
-    if (!this.suggestions.tryTake(userId)) {
-      this.logger.log({ event: BotEvent.RateLimited, limit: Limit.Suggestions, userId });
-      return ctx.reply(TEXTS.tooManySuggestions);
+
+    const sent = await this.suggest(ctx.from!, fileId);
+    await ctx.reply(sent ? TEXTS.sentToTrainer : TEXTS.tooManySuggestions);
+  }
+
+  private async onSuggestButton(ctx: Context) {
+    const photo = ctx.msg?.photo;
+    if (!photo) return ctx.answerCallbackQuery();
+
+    const sent = await this.suggest(ctx.from!, largestPhoto(photo).file_id);
+    if (sent) await ctx.editMessageReplyMarkup();
+    await ctx.answerCallbackQuery({ text: sent ? TEXTS.sentToTrainer : TEXTS.tooManySuggestions, show_alert: !sent });
+  }
+
+  private async suggest(from: User, fileId: string): Promise<boolean> {
+    if (!this.suggestions.tryTake(from.id)) {
+      this.logger.log({ event: BotEvent.RateLimited, limit: Limit.Suggestions, userId: from.id });
+      return false;
     }
 
-    await this.bot.api.sendPhoto(config.trainerChatId, fileId, mentionCaption(TEXTS.suggestedBy, ctx.from!));
-    this.logger.log({ event: BotEvent.Suggestion, userId });
-    await ctx.reply(TEXTS.sentToTrainer);
+    await this.bot.api.sendPhoto(config.trainerChatId, fileId, mentionCaption(TEXTS.suggestedBy, from));
+    this.logger.log({ event: BotEvent.Suggestion, userId: from.id });
+    return true;
   }
 }
