@@ -1,4 +1,5 @@
-import type { Document, Message, PhotoSize, User } from 'grammy/types';
+import { type InputFile, InputMediaBuilder } from 'grammy';
+import type { Document, InputMediaPhoto, Message, PhotoSize, User } from 'grammy/types';
 import type { PhotoCaption } from './bot.types.ts';
 
 export function displayName(user: User): string {
@@ -23,6 +24,10 @@ export function largestPhoto(photos: PhotoSize[]): PhotoSize {
 
 export function botPhotoId(message: Pick<Message, 'from' | 'photo'>, botId: number): string | undefined {
   return message.from?.id === botId && message.photo ? largestPhoto(message.photo).file_id : undefined;
+}
+
+export function album(photos: (string | InputFile)[], caption?: PhotoCaption): InputMediaPhoto[] {
+  return photos.map((photo, i) => InputMediaBuilder.photo(photo, i === 0 ? caption : undefined));
 }
 
 export async function downloadFile(botToken: string, filePath: string): Promise<Buffer> {

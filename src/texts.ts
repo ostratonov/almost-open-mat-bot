@@ -11,6 +11,7 @@ export const TEXTS = {
   about: 'привіт, дай мені картинку і все буде almost open mat',
   support: 'іді нахуй',
   notAnImage: 'це не картинка, петушара',
+  drawing: 'дєлаю свойо...',
   cannotOpen: 'Не зміг відкрити цю картинку',
   sendPictureFirst: 'спершу кинь картинку',
   replyToCaptioned: 'реплайни /suggest на картинку з написом від мене.',

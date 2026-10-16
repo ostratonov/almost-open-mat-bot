@@ -1,19 +1,26 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
-import { Bot, Context, InputFile } from 'grammy';
+import { Bot, Context, InputFile, InputMediaBuilder } from 'grammy';
+import type { User } from 'grammy/types';
 import { config } from '../config.ts';
 import { addCaption } from '../image/caption.ts';
 import { Command, MENU, TEXTS } from '../texts.ts';
+import type { PendingPicture, RenderedPicture } from './bot.types.ts';
+import { MediaGroupCollector } from './media-group.ts';
 import { RateLimiter } from './rate-limiter.ts';
-import { botPhotoId, downloadFile, isImage, largestPhoto, mentionCaption } from './telegram.utils.ts';
+import { album, botPhotoId, downloadFile, isImage, largestPhoto, mentionCaption } from './telegram.utils.ts';
 
 const SUGGESTIONS_PER_MINUTE = 3;
+const ALBUM_QUIET_MS = 1000;
+
+const elapsed = (from: number) => Math.round(performance.now() - from);
 
 @Injectable()
 export class BotService implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(BotService.name);
   private readonly bot = new Bot(config.botToken);
-  private readonly lastPicture = new Map<number, string>();
+  private readonly lastPictures = new Map<number, string[]>();
   private readonly suggestions = new RateLimiter(SUGGESTIONS_PER_MINUTE, 60_000);
+  private readonly albums = new MediaGroupCollector<PendingPicture>(ALBUM_QUIET_MS, (items) => this.onAlbum(items));
 
   onApplicationBootstrap() {
     this.setUpProfile();
@@ -45,39 +52,85 @@ export class BotService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private async onPicture(ctx: Context) {
+    const groupId = ctx.message?.media_group_id;
+    if (!groupId) {
+      const placeholder = await ctx.reply(TEXTS.drawing);
+      return this.answer([ctx], placeholder.message_id);
+    }
+
+    const placeholderId = this.albums.has(groupId) ? undefined : (await ctx.reply(TEXTS.drawing)).message_id;
+    this.albums.add(groupId, { ctx, placeholderId });
+  }
+
+  // Runs from a timer, outside grammY's middleware, so bot.catch never sees its errors.
+  private onAlbum(items: PendingPicture[]) {
+    const placeholderId = items.find((item) => item.placeholderId)!.placeholderId!;
+    const pictures = items.map((item) => item.ctx).sort((a, b) => a.message!.message_id - b.message!.message_id);
+    this.answer(pictures, placeholderId).catch((err) => this.logger.error(err));
+  }
+
+  private async answer(pictures: Context[], placeholderId: number) {
+    const chatId = pictures[0].chat!.id;
+    const results = await Promise.all(
+      pictures.map((ctx) =>
+        this.render(ctx).catch((err) => {
+          this.logger.warn(`picture failed: ${err}`);
+          return null;
+        }),
+      ),
+    );
+    const rendered = results.filter((r) => r !== null);
+    if (!rendered.length) return this.bot.api.editMessageText(chatId, placeholderId, TEXTS.cannotOpen);
+
+    const sending = performance.now();
+    const fileIds =
+      rendered.length === 1
+        ? await this.replacePlaceholder(chatId, placeholderId, rendered[0].image)
+        : await this.sendAlbum(chatId, placeholderId, rendered.map((r) => r.image));
+    this.lastPictures.set(chatId, fileIds);
+
+    this.logger.log(`${rendered.map((r) => r.timings).join('; ')}; send ${elapsed(sending)}ms`);
+  }
+
+  private async replacePlaceholder(chatId: number, placeholderId: number, image: Buffer): Promise<string[]> {
+    const edited = await this.bot.api.editMessageMedia(chatId, placeholderId, InputMediaBuilder.photo(new InputFile(image)));
+    return edited !== true && edited.photo ? [largestPhoto(edited.photo).file_id] : [];
+  }
+
+  private async sendAlbum(chatId: number, placeholderId: number, images: Buffer[]): Promise<string[]> {
+    const sent = await this.bot.api.sendMediaGroup(chatId, album(images.map((image) => new InputFile(image))));
+    await this.bot.api.deleteMessage(chatId, placeholderId);
+    return sent.flatMap((message) => ('photo' in message ? [largestPhoto(message.photo).file_id] : []));
+  }
+
+  private async render(ctx: Context): Promise<RenderedPicture> {
     const started = performance.now();
-    void ctx.replyWithChatAction('upload_photo');
     const file = await ctx.getFile();
     const original = await downloadFile(config.botToken, file.file_path!);
     const downloaded = performance.now();
-
-    const image = await addCaption(original).catch((err) => {
-      this.logger.warn(`caption failed: ${err}`);
-      return null;
-    });
-    
-    if (!image) return ctx.reply(TEXTS.cannotOpen);
-
-    const captioned = performance.now();
-
-    const sent = await ctx.replyWithPhoto(new InputFile(image));
-    this.lastPicture.set(ctx.chat!.id, largestPhoto(sent.photo).file_id);
-
-    const ms = (from: number, to: number) => Math.round(to - from);
-    this.logger.log(
-      `picture ${original.length >> 10}KB: download ${ms(started, downloaded)}ms, caption ${ms(downloaded, captioned)}ms, send ${ms(captioned, performance.now())}ms`,
-    );
+    const image = await addCaption(original);
+    return {
+      image,
+      timings: `${original.length >> 10}KB: download ${Math.round(downloaded - started)}ms, caption ${elapsed(downloaded)}ms`,
+    };
   }
 
   private async onSuggest(ctx: Context) {
     const chatId = ctx.chat!.id;
     const replied = ctx.message?.reply_to_message;
-    const fileId = replied ? botPhotoId(replied, ctx.me.id) : this.lastPicture.get(chatId);
-    if (!fileId) return ctx.reply(replied ? TEXTS.replyToCaptioned : TEXTS.sendPictureFirst);
+    const repliedId = replied && botPhotoId(replied, ctx.me.id);
+    const fileIds = replied ? (repliedId ? [repliedId] : []) : (this.lastPictures.get(chatId) ?? []);
+    if (!fileIds.length) return ctx.reply(replied ? TEXTS.replyToCaptioned : TEXTS.sendPictureFirst);
     if (!this.suggestions.tryTake(ctx.from!.id)) return ctx.reply(TEXTS.tooManySuggestions);
 
-    await ctx.api.sendPhoto(config.trainerChatId, fileId, mentionCaption(TEXTS.suggestedBy, ctx.from!));
-    if (this.lastPicture.get(chatId) === fileId) this.lastPicture.delete(chatId);
+    await this.sendToTrainer(fileIds, ctx.from!);
+    if (this.lastPictures.get(chatId) === fileIds) this.lastPictures.delete(chatId);
     await ctx.reply(TEXTS.sentToTrainer);
+  }
+
+  private async sendToTrainer(fileIds: string[], from: User) {
+    const caption = mentionCaption(TEXTS.suggestedBy, from);
+    if (fileIds.length === 1) await this.bot.api.sendPhoto(config.trainerChatId, fileIds[0], caption);
+    else await this.bot.api.sendMediaGroup(config.trainerChatId, album(fileIds, caption));
   }
 }
